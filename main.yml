@@ -1,0 +1,475 @@
+---
+- name: Ubuntu Desktop Bootstrap
+  hosts: localhost
+  connection: local
+  become: true
+
+  vars:
+    github_username: jediBui
+    # Pango font string used by both gnome-terminal and ptyxis.
+    # "Mono" variant is truly monospaced; matches SFMonoNerdFontMono-Regular.ttf.
+    font_name: "SFMono Nerd Font Mono Regular"
+    font_size: "13"
+
+  # ── USER DETECTION ───────────────────────────────────────────────────────────
+  pre_tasks:
+    - name: Detect the real (non-root) user who invoked this playbook
+      ansible.builtin.shell: |
+        if [ -n "${SUDO_USER:-}" ] && [ "${SUDO_USER}" != "root" ]; then
+          echo "${SUDO_USER}"
+        elif [ -n "${USER:-}" ] && [ "${USER}" != "root" ]; then
+          echo "${USER}"
+        else
+          getent passwd | awk -F: '$3 >= 1000 && $3 < 65534 { print $1; exit }'
+        fi
+      register: _detected_user
+      changed_when: false
+
+    - name: Set target user facts
+      ansible.builtin.set_fact:
+        target_user: "{{ _detected_user.stdout | trim }}"
+        target_home: "/home/{{ _detected_user.stdout | trim }}"
+
+    - name: Update apt cache
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 3600
+
+  tasks:
+
+    # ── SSH SERVER + KEYS ────────────────────────────────────────────────────
+    # Install openssh-server first so /etc/ssh/sshd_config.d/ exists before
+    # we write a drop-in config into it.
+    - name: Install openssh-server
+      ansible.builtin.apt:
+        name: openssh-server
+        state: present
+
+    - name: Enable and start openssh-server
+      ansible.builtin.service:
+        name: ssh
+        state: started
+        enabled: true
+
+    - name: Ensure /etc/ssh/sshd_config.d/ exists
+      ansible.builtin.file:
+        path: /etc/ssh/sshd_config.d
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Disable SSH password authentication (drop-in config)
+      ansible.builtin.copy:
+        dest: /etc/ssh/sshd_config.d/99-no-password-auth.conf
+        content: |
+          PasswordAuthentication no
+          KbdInteractiveAuthentication no
+          PubkeyAuthentication yes
+        owner: root
+        group: root
+        mode: "0644"
+      notify: Restart sshd
+
+    - name: Ensure ~/.ssh directory exists for {{ target_user }}
+      ansible.builtin.file:
+        path: "{{ target_home }}/.ssh"
+        state: directory
+        owner: "{{ target_user }}"
+        group: "{{ target_user }}"
+        mode: "0700"
+
+    - name: Download authorized_keys from GitHub ({{ github_username }})
+      ansible.builtin.get_url:
+        url: "https://github.com/{{ github_username }}.keys"
+        dest: "{{ target_home }}/.ssh/authorized_keys"
+        owner: "{{ target_user }}"
+        group: "{{ target_user }}"
+        mode: "0600"
+        force: true
+
+    # ── FIREWALL ──────────────────────────────────────────────────────────────
+    - name: Install UFW
+      ansible.builtin.apt:
+        name: ufw
+        state: present
+
+    - name: Allow SSH (22/tcp)
+      ansible.builtin.command: ufw allow 22/tcp
+      changed_when: false
+
+    - name: Allow RDP (3389/tcp)
+      ansible.builtin.command: ufw allow 3389/tcp
+      changed_when: false
+
+    - name: Enable UFW (idempotent)
+      ansible.builtin.shell: |
+        if ! ufw status | grep -q "Status: active"; then
+          echo "y" | ufw enable
+        fi
+      changed_when: false
+
+    # ── CORE APT PACKAGES ────────────────────────────────────────────────────
+    - name: Install core packages
+      ansible.builtin.apt:
+        name:
+          - curl
+          - wget
+          - git
+          - fzf
+          - qemu-guest-agent
+          - qbittorrent
+          - zsh
+          - unzip
+          - gnupg2
+          - apt-transport-https
+          - software-properties-common
+          - ca-certificates
+          - dconf-cli
+          - xdg-utils
+          - fontconfig
+          - python3-psutil
+        state: present
+
+    - name: Enable and start qemu-guest-agent
+      ansible.builtin.service:
+        name: qemu-guest-agent
+        state: started
+        enabled: true
+      ignore_errors: true
+
+    # ── GOOGLE CHROME ────────────────────────────────────────────────────────
+    - name: Create /etc/apt/keyrings directory
+      ansible.builtin.file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: "0755"
+
+    - name: Add Google Chrome signing key
+      ansible.builtin.shell: |
+        curl -fsSL https://dl.google.com/linux/linux_signing_key.pub \
+          | gpg --dearmor -o /etc/apt/keyrings/google-chrome.gpg
+      args:
+        creates: /etc/apt/keyrings/google-chrome.gpg
+
+    - name: Add Google Chrome apt repository
+      ansible.builtin.apt_repository:
+        repo: "deb [arch=amd64 signed-by=/etc/apt/keyrings/google-chrome.gpg] https://dl.google.com/linux/chrome/deb/ stable main"
+        filename: google-chrome
+        state: present
+        update_cache: true
+
+    - name: Install Google Chrome
+      ansible.builtin.apt:
+        name: google-chrome-stable
+        state: present
+
+    # ── FASTFETCH ────────────────────────────────────────────────────────────
+    - name: Add fastfetch PPA
+      ansible.builtin.apt_repository:
+        repo: ppa:zhangsongcui3371/fastfetch
+        state: present
+        update_cache: true
+      register: _fastfetch_ppa
+      ignore_errors: true
+
+    - name: Install fastfetch via PPA
+      ansible.builtin.apt:
+        name: fastfetch
+        state: present
+      when: _fastfetch_ppa is succeeded
+
+    - name: Install fastfetch from GitHub releases (PPA fallback)
+      ansible.builtin.shell: |
+        LATEST=$(curl -fsSL https://api.github.com/repos/fastfetch-cli/fastfetch/releases/latest \
+          | grep '"tag_name"' | head -1 | cut -d '"' -f 4)
+        curl -fsSL \
+          "https://github.com/fastfetch-cli/fastfetch/releases/download/${LATEST}/fastfetch-linux-amd64.deb" \
+          -o /tmp/fastfetch.deb
+        dpkg -i /tmp/fastfetch.deb
+      args:
+        creates: /usr/bin/fastfetch
+      when: _fastfetch_ppa is failed
+      ignore_errors: true
+
+    # ── NORDVPN ───────────────────────────────────────────────────────────────
+    - name: Add NordVPN signing key
+      ansible.builtin.shell: |
+        curl -fsSL https://repo.nordvpn.com/gpg/nordvpn_public.asc \
+          | gpg --dearmor -o /etc/apt/keyrings/nordvpn.gpg
+      args:
+        creates: /etc/apt/keyrings/nordvpn.gpg
+
+    - name: Add NordVPN apt repository
+      ansible.builtin.apt_repository:
+        repo: "deb [signed-by=/etc/apt/keyrings/nordvpn.gpg] https://repo.nordvpn.com/deb/nordvpn/debian stable main"
+        filename: nordvpn
+        state: present
+        update_cache: true
+
+    - name: Install NordVPN
+      ansible.builtin.apt:
+        name: nordvpn
+        state: present
+      ignore_errors: true
+
+    # ── PTYXIS TERMINAL ───────────────────────────────────────────────────────
+    - name: Try installing ptyxis via apt (Ubuntu 24.10+)
+      ansible.builtin.apt:
+        name: ptyxis
+        state: present
+      register: _ptyxis_apt
+      ignore_errors: true
+
+    - name: Install flatpak (ptyxis fallback for older Ubuntu)
+      ansible.builtin.apt:
+        name: flatpak
+        state: present
+      when: _ptyxis_apt is failed
+
+    - name: Add Flathub remote
+      ansible.builtin.command: >
+        flatpak remote-add --if-not-exists flathub
+        https://dl.flathub.org/repo/flathub.flatpakrepo
+      when: _ptyxis_apt is failed
+      ignore_errors: true
+
+    - name: Install ptyxis via Flatpak
+      ansible.builtin.command: flatpak install -y flathub app.devsuite.Ptyxis
+      args:
+        creates: /var/lib/flatpak/app/app.devsuite.Ptyxis
+      when: _ptyxis_apt is failed
+      ignore_errors: true
+
+    # ── ZSH ──────────────────────────────────────────────────────────────────
+    - name: Set zsh as default shell for {{ target_user }}
+      ansible.builtin.user:
+        name: "{{ target_user }}"
+        shell: /bin/zsh
+
+    # ── STARSHIP PROMPT ───────────────────────────────────────────────────────
+    - name: Install starship prompt
+      ansible.builtin.shell: |
+        curl -sS https://starship.rs/install.sh | sh -s -- --yes
+      args:
+        creates: /usr/local/bin/starship
+
+    - name: Ensure ~/.config exists for {{ target_user }}
+      ansible.builtin.file:
+        path: "{{ target_home }}/.config"
+        state: directory
+        owner: "{{ target_user }}"
+        group: "{{ target_user }}"
+        mode: "0755"
+
+    - name: Download catppuccin frappe starship theme
+      ansible.builtin.get_url:
+        url: https://raw.githubusercontent.com/catppuccin/starship/main/themes/frappe.toml
+        dest: "{{ target_home }}/.config/starship.toml"
+        owner: "{{ target_user }}"
+        group: "{{ target_user }}"
+        mode: "0644"
+        force: false
+
+    # ── SFMONO NERD FONT ─────────────────────────────────────────────────────
+    - name: Create system font directory for SFMono
+      ansible.builtin.file:
+        path: /usr/local/share/fonts/SFMono
+        state: directory
+        mode: "0755"
+
+    - name: Download SFMono Nerd Font zip (latest release)
+      ansible.builtin.get_url:
+        url: https://github.com/ryanoasis/nerd-fonts/releases/latest/download/SFMono.zip
+        dest: /tmp/SFMono.zip
+        mode: "0644"
+        timeout: 120
+
+    - name: Extract SFMono Regular weight files only
+      ansible.builtin.shell: |
+        unzip -o /tmp/SFMono.zip -d /tmp/SFMono_extracted/
+        find /tmp/SFMono_extracted -name "*Regular*.ttf" \
+          -exec cp -v {} /usr/local/share/fonts/SFMono/ \;
+        rm -rf /tmp/SFMono_extracted
+      args:
+        creates: /usr/local/share/fonts/SFMono/SFMonoNerdFont-Regular.ttf
+
+    - name: Rebuild font cache
+      ansible.builtin.command: fc-cache -fv
+      changed_when: false
+
+    # ── GNOME-TERMINAL FONT ───────────────────────────────────────────────────
+    # gsettings requires an active D-Bus user session. This task is best-effort:
+    # it is skipped gracefully if no session exists (e.g. headless first boot).
+    - name: Configure gnome-terminal font
+      become: true
+      become_user: "{{ target_user }}"
+      ansible.builtin.shell: |
+        export DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u)/bus"
+        PROFILE=$(gsettings get org.gnome.Terminal.ProfilesList default 2>/dev/null \
+          | tr -d "'" | tr -d ' ')
+        if [ -z "$PROFILE" ]; then
+          PROFILE=$(python3 -c "import uuid; print(uuid.uuid4())")
+          gsettings set org.gnome.Terminal.ProfilesList default "'${PROFILE}'" 2>/dev/null || true
+          gsettings set org.gnome.Terminal.ProfilesList list "['${PROFILE}']" 2>/dev/null || true
+        fi
+        BASE="org.gnome.Terminal.Legacy.Profile:/org/gnome/terminal/legacy/profiles:/:${PROFILE}/"
+        gsettings set "${BASE}" font '{{ font_name }} {{ font_size }}' 2>/dev/null || true
+        gsettings set "${BASE}" use-system-font false 2>/dev/null || true
+      ignore_errors: true
+
+    # ── PTYXIS FONT ───────────────────────────────────────────────────────────
+    - name: Configure ptyxis font
+      become: true
+      become_user: "{{ target_user }}"
+      ansible.builtin.shell: |
+        export DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u)/bus"
+        PROFILES=$(gsettings get app.devsuite.Ptyxis profiles 2>/dev/null \
+          | tr -d "[]'" | tr ',' '\n' | tr -d ' ' || true)
+        for profile in $PROFILES; do
+          [ -z "$profile" ] && continue
+          BASE="app.devsuite.Ptyxis.Profile:/app/devsuite/ptyxis/profiles/${profile}/"
+          gsettings set "${BASE}" use-system-font false 2>/dev/null || true
+          gsettings set "${BASE}" font-name '{{ font_name }} {{ font_size }}' 2>/dev/null || true
+        done
+      ignore_errors: true
+
+    # ── FASTFETCH CONFIG ──────────────────────────────────────────────────────
+    - name: Create fastfetch config directory
+      ansible.builtin.file:
+        path: "{{ target_home }}/.config/fastfetch"
+        state: directory
+        owner: "{{ target_user }}"
+        group: "{{ target_user }}"
+        mode: "0755"
+
+    - name: Write fastfetch config (Ubuntu theme)
+      ansible.builtin.copy:
+        dest: "{{ target_home }}/.config/fastfetch/config.jsonc"
+        owner: "{{ target_user }}"
+        group: "{{ target_user }}"
+        mode: "0644"
+        content: |
+          {
+            "$schema": "https://github.com/fastfetch-cli/fastfetch/raw/dev/doc/json_schema.json",
+            "logo": {
+              "type": "builtin",
+              "source": "Ubuntu",
+              "padding": { "top": 1, "left": 2 }
+            },
+            "display": {
+              "separator": "  →  ",
+              "color": { "keys": "yellow", "title": "red" }
+            },
+            "modules": [
+              "title",
+              "separator",
+              { "type": "os",       "key": "  OS" },
+              { "type": "host",     "key": "  Host" },
+              { "type": "kernel",   "key": "  Kernel" },
+              { "type": "uptime",   "key": "  Uptime" },
+              { "type": "packages", "key": "  Packages" },
+              { "type": "shell",    "key": "  Shell" },
+              { "type": "display",  "key": "  Resolution" },
+              { "type": "de",       "key": "  DE" },
+              { "type": "wm",       "key": "  WM" },
+              { "type": "terminal", "key": "  Terminal" },
+              { "type": "cpu",      "key": "  CPU" },
+              { "type": "gpu",      "key": "  GPU" },
+              { "type": "memory",   "key": "  Memory" },
+              { "type": "disk",     "key": "  Disk" },
+              { "type": "localip",  "key": "  IP" },
+              "separator",
+              "colors"
+            ]
+          }
+
+    # ── .ZSHRC CONFIGURATION ─────────────────────────────────────────────────
+    - name: Ensure .zshrc exists
+      ansible.builtin.file:
+        path: "{{ target_home }}/.zshrc"
+        state: touch
+        owner: "{{ target_user }}"
+        group: "{{ target_user }}"
+        mode: "0644"
+        modification_time: preserve
+        access_time: preserve
+
+    - name: Add fastfetch launcher to .zshrc
+      ansible.builtin.blockinfile:
+        path: "{{ target_home }}/.zshrc"
+        marker: "# {mark} ANSIBLE MANAGED: FASTFETCH"
+        block: |
+          command -v fastfetch &>/dev/null && fastfetch
+
+    - name: Add fzf key bindings to .zshrc
+      ansible.builtin.blockinfile:
+        path: "{{ target_home }}/.zshrc"
+        marker: "# {mark} ANSIBLE MANAGED: FZF"
+        block: |
+          [ -f /usr/share/doc/fzf/examples/key-bindings.zsh ] && \
+            source /usr/share/doc/fzf/examples/key-bindings.zsh
+          [ -f /usr/share/doc/fzf/examples/completion.zsh ] && \
+            source /usr/share/doc/fzf/examples/completion.zsh
+
+    - name: Add starship init to .zshrc
+      ansible.builtin.blockinfile:
+        path: "{{ target_home }}/.zshrc"
+        marker: "# {mark} ANSIBLE MANAGED: STARSHIP"
+        block: |
+          command -v starship &>/dev/null && eval "$(starship init zsh)"
+
+    # ── RDP via xrdp ─────────────────────────────────────────────────────────
+    - name: Install xrdp and xorgxrdp
+      ansible.builtin.apt:
+        name:
+          - xrdp
+          - xorgxrdp
+        state: present
+
+    - name: Add xrdp to ssl-cert group (TLS certificate access)
+      ansible.builtin.user:
+        name: xrdp
+        groups: ssl-cert
+        append: true
+
+    - name: Configure GNOME session for xrdp
+      ansible.builtin.copy:
+        dest: "{{ target_home }}/.xsession"
+        content: |
+          export GNOME_SHELL_SESSION_MODE=ubuntu
+          export XDG_CURRENT_DESKTOP=ubuntu:GNOME
+          exec /usr/bin/gnome-session
+        owner: "{{ target_user }}"
+        group: "{{ target_user }}"
+        mode: "0644"
+
+    - name: Ensure polkit local authority directory exists
+      ansible.builtin.file:
+        path: /etc/polkit-1/localauthority/50-local.d
+        state: directory
+        mode: "0755"
+
+    - name: Allow colord via polkit (suppresses xrdp color-manager authentication dialogs)
+      ansible.builtin.copy:
+        dest: /etc/polkit-1/localauthority/50-local.d/45-allow-colord.pkla
+        content: |
+          [Allow Colord all Users]
+          Identity=unix-user:*
+          Action=org.freedesktop.color-manager.create-device;org.freedesktop.color-manager.create-profile;org.freedesktop.color-manager.delete-device;org.freedesktop.color-manager.delete-profile;org.freedesktop.color-manager.modify-device;org.freedesktop.color-manager.modify-profile
+          ResultAny=no
+          ResultInactive=no
+          ResultActive=yes
+        mode: "0644"
+
+    - name: Enable and start xrdp
+      ansible.builtin.service:
+        name: xrdp
+        state: started
+        enabled: true
+
+  handlers:
+    - name: Restart sshd
+      ansible.builtin.service:
+        name: ssh
+        state: restarted
