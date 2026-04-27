@@ -88,6 +88,8 @@ echo
 echo "  Next steps:"
 echo "  1. Log out and back in so zsh becomes your active shell."
 echo "  2. Run 'nordvpn login' to authenticate NordVPN."
-echo "  3. Connect via RDP on port 3389 (xrdp is running)."
-echo "  4. gsettings font changes take effect on your next graphical login."
+echo "  3. Set RDP credentials (required before first remote connection):"
+echo "       grdctl rdp set-credentials <username> <password>"
+echo "  4. Connect via RDP on port 3389 — GNOME Remote Desktop shares your session."
+echo "  5. Font/gsettings changes take effect on your next graphical login."
 echo

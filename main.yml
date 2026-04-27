@@ -278,21 +278,15 @@
         state: directory
         mode: "0755"
 
-    - name: Download SFMono Nerd Font zip (latest release)
-      ansible.builtin.get_url:
-        url: https://github.com/ryanoasis/nerd-fonts/releases/latest/download/SFMono.zip
-        dest: /tmp/SFMono.zip
-        mode: "0644"
-        timeout: 120
-
-    - name: Extract SFMono Regular weight files only
+    - name: Clone and install SFMono Nerd Font (Regular weight)
       ansible.builtin.shell: |
-        unzip -o /tmp/SFMono.zip -d /tmp/SFMono_extracted/
-        find /tmp/SFMono_extracted -name "*Regular*.ttf" \
+        git clone --depth 1 https://github.com/epk/SF-Mono-Nerd-Font.git /tmp/sf-mono-nerd
+        find /tmp/sf-mono-nerd -maxdepth 2 -iname "*regular*" \( -name "*.otf" -o -name "*.ttf" \) \
           -exec cp -v {} /usr/local/share/fonts/SFMono/ \;
-        rm -rf /tmp/SFMono_extracted
+        rm -rf /tmp/sf-mono-nerd
+        touch /usr/local/share/fonts/SFMono/.installed
       args:
-        creates: /usr/local/share/fonts/SFMono/SFMonoNerdFont-Regular.ttf
+        creates: /usr/local/share/fonts/SFMono/.installed
 
     - name: Rebuild font cache
       ansible.builtin.command: fc-cache -fv
@@ -419,54 +413,47 @@
         block: |
           command -v starship &>/dev/null && eval "$(starship init zsh)"
 
-    # ── RDP via xrdp ─────────────────────────────────────────────────────────
-    - name: Install xrdp and xorgxrdp
+    # ── GNOME REMOTE DESKTOP (built-in RDP, port 3389) ───────────────────────
+    # Uses the native gnome-remote-desktop service — no xrdp needed.
+    # This shares the user's existing GNOME session (true desktop sharing).
+    - name: Install gnome-remote-desktop
       ansible.builtin.apt:
-        name:
-          - xrdp
-          - xorgxrdp
+        name: gnome-remote-desktop
         state: present
 
-    - name: Add xrdp to ssl-cert group (TLS certificate access)
-      ansible.builtin.user:
-        name: xrdp
-        groups: ssl-cert
-        append: true
+    - name: Enable linger for {{ target_user }} (user services survive logout)
+      ansible.builtin.command: loginctl enable-linger {{ target_user }}
+      changed_when: false
 
-    - name: Configure GNOME session for xrdp
-      ansible.builtin.copy:
-        dest: "{{ target_home }}/.xsession"
-        content: |
-          export GNOME_SHELL_SESSION_MODE=ubuntu
-          export XDG_CURRENT_DESKTOP=ubuntu:GNOME
-          exec /usr/bin/gnome-session
-        owner: "{{ target_user }}"
-        group: "{{ target_user }}"
-        mode: "0644"
+    - name: Configure GNOME Remote Desktop settings
+      become: true
+      become_user: "{{ target_user }}"
+      ansible.builtin.shell: |
+        export DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u)/bus"
+        gsettings set org.gnome.desktop.remote-desktop.rdp screen-share-mode extend 2>/dev/null || true
+        gsettings set org.gnome.desktop.remote-desktop.rdp enable true 2>/dev/null || true
+        gsettings set org.gnome.desktop.remote-desktop.rdp view-only false 2>/dev/null || true
+      ignore_errors: true
 
-    - name: Ensure polkit local authority directory exists
-      ansible.builtin.file:
-        path: /etc/polkit-1/localauthority/50-local.d
-        state: directory
-        mode: "0755"
+    - name: Enable RDP and generate TLS certificates via grdctl
+      become: true
+      become_user: "{{ target_user }}"
+      ansible.builtin.shell: |
+        export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+        export DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u)/bus"
+        grdctl rdp enable 2>/dev/null || true
+        grdctl rdp set-view-only false 2>/dev/null || true
+      ignore_errors: true
 
-    - name: Allow colord via polkit (suppresses xrdp color-manager authentication dialogs)
-      ansible.builtin.copy:
-        dest: /etc/polkit-1/localauthority/50-local.d/45-allow-colord.pkla
-        content: |
-          [Allow Colord all Users]
-          Identity=unix-user:*
-          Action=org.freedesktop.color-manager.create-device;org.freedesktop.color-manager.create-profile;org.freedesktop.color-manager.delete-device;org.freedesktop.color-manager.delete-profile;org.freedesktop.color-manager.modify-device;org.freedesktop.color-manager.modify-profile
-          ResultAny=no
-          ResultInactive=no
-          ResultActive=yes
-        mode: "0644"
-
-    - name: Enable and start xrdp
-      ansible.builtin.service:
-        name: xrdp
-        state: started
-        enabled: true
+    - name: Enable gnome-remote-desktop user service
+      become: true
+      become_user: "{{ target_user }}"
+      ansible.builtin.shell: |
+        export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+        export DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u)/bus"
+        systemctl --user enable gnome-remote-desktop 2>/dev/null || true
+        systemctl --user start gnome-remote-desktop 2>/dev/null || true
+      ignore_errors: true
 
   handlers:
     - name: Restart sshd
