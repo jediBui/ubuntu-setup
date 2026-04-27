@@ -207,9 +207,11 @@
         state: present
         update_cache: true
 
-    - name: Install NordVPN
+    - name: Install NordVPN CLI and GUI
       ansible.builtin.apt:
-        name: nordvpn
+        name:
+          - nordvpn
+          - nordvpn-gui
         state: present
       ignore_errors: true
 
