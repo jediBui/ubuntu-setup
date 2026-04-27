@@ -49,30 +49,28 @@ fi
 # ── RESOLVE PLAYBOOK ──────────────────────────────────────────────────────────
 mkdir -p "$(dirname "$PLAYBOOK_PATH")"
 
-# Check for a local main.yml in the same dir as this script OR in $PWD.
-# The BASH_SOURCE trick does NOT work when piped through curl, so we check
-# both locations so the local-SCP workflow still functions.
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-}")" 2>/dev/null && pwd || true)"
-LOCAL_PLAYBOOK=""
-for candidate in "${SCRIPT_DIR}/main.yml" "${PWD}/main.yml"; do
-  if [[ -f "$candidate" ]]; then
-    LOCAL_PLAYBOOK="$candidate"
-    break
-  fi
-done
-
-if [[ -n "$LOCAL_PLAYBOOK" ]]; then
-  info "Found local main.yml at ${LOCAL_PLAYBOOK} — using it."
-  cp "$LOCAL_PLAYBOOK" "$PLAYBOOK_PATH"
-  ok "Using local playbook."
+# Always try GitHub first so a stale local copy never silently wins.
+# Fall back to a local main.yml only if the download fails.
+info "Downloading main.yml from GitHub..."
+if curl -fsSL "$PLAYBOOK_URL" -o "$PLAYBOOK_PATH" 2>/dev/null; then
+  ok "Playbook downloaded from GitHub."
 else
-  info "Downloading main.yml from GitHub..."
-  if ! curl -fsSL "$PLAYBOOK_URL" -o "$PLAYBOOK_PATH"; then
-    die "Download failed. Verify that main.yml is pushed to:
-  https://github.com/${GITHUB_USER}/${REPO}/blob/${BRANCH}/main.yml
-  OR copy main.yml to this directory and re-run: sudo bash bootstrap.sh"
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-}")" 2>/dev/null && pwd || true)"
+  LOCAL_PLAYBOOK=""
+  for candidate in "${SCRIPT_DIR}/main.yml" "${PWD}/main.yml"; do
+    if [[ -f "$candidate" ]]; then
+      LOCAL_PLAYBOOK="$candidate"
+      break
+    fi
+  done
+
+  if [[ -n "$LOCAL_PLAYBOOK" ]]; then
+    info "GitHub unreachable — falling back to local file: ${LOCAL_PLAYBOOK}"
+    cp "$LOCAL_PLAYBOOK" "$PLAYBOOK_PATH"
+  else
+    die "Download failed and no local main.yml found. Verify:
+  https://github.com/${GITHUB_USER}/${REPO}/blob/${BRANCH}/main.yml"
   fi
-  ok "Playbook downloaded."
 fi
 
 # ── RUN ANSIBLE ───────────────────────────────────────────────────────────────
