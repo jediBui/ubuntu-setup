@@ -227,6 +227,34 @@
         name: "{{ target_user }}"
         shell: /bin/zsh
 
+    # ── ZSH PLUGINS ──────────────────────────────────────────────────────────
+    - name: Install zsh-autosuggestions and zsh-syntax-highlighting via apt
+      ansible.builtin.apt:
+        name:
+          - zsh-autosuggestions
+          - zsh-syntax-highlighting
+        state: present
+
+    - name: Create system zsh plugins directory
+      ansible.builtin.file:
+        path: /usr/local/share/zsh/plugins
+        state: directory
+        mode: "0755"
+
+    - name: Clone zsh-fast-syntax-highlighting
+      ansible.builtin.git:
+        repo: https://github.com/zdharma-continuum/fast-syntax-highlighting.git
+        dest: /usr/local/share/zsh/plugins/fast-syntax-highlighting
+        depth: 1
+        update: true
+
+    - name: Clone zsh-autocomplete
+      ansible.builtin.git:
+        repo: https://github.com/marlonrichert/zsh-autocomplete.git
+        dest: /usr/local/share/zsh/plugins/zsh-autocomplete
+        depth: 1
+        update: true
+
     # ── STARSHIP PROMPT ───────────────────────────────────────────────────────
     - name: Install starship prompt
       ansible.builtin.shell: |
@@ -331,6 +359,24 @@
         mode: "0644"
         modification_time: preserve
         access_time: preserve
+
+    - name: Add zsh plugins to .zshrc
+      ansible.builtin.blockinfile:
+        path: "{{ target_home }}/.zshrc"
+        marker: "# {mark} ANSIBLE MANAGED: ZSH PLUGINS"
+        block: |
+          # zsh-autocomplete (must load before compinit)
+          [ -f /usr/local/share/zsh/plugins/zsh-autocomplete/zsh-autocomplete.plugin.zsh ] && \
+            source /usr/local/share/zsh/plugins/zsh-autocomplete/zsh-autocomplete.plugin.zsh
+          # zsh-autosuggestions
+          [ -f /usr/share/zsh-autosuggestions/zsh-autosuggestions.zsh ] && \
+            source /usr/share/zsh-autosuggestions/zsh-autosuggestions.zsh
+          # zsh-fast-syntax-highlighting (replaces zsh-syntax-highlighting)
+          if [ -f /usr/local/share/zsh/plugins/fast-syntax-highlighting/fast-syntax-highlighting.plugin.zsh ]; then
+            source /usr/local/share/zsh/plugins/fast-syntax-highlighting/fast-syntax-highlighting.plugin.zsh
+          elif [ -f /usr/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh ]; then
+            source /usr/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh
+          fi
 
     - name: Add fastfetch launcher to .zshrc
       ansible.builtin.blockinfile:
