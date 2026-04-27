@@ -47,31 +47,19 @@ if ! ansible-galaxy collection list 2>/dev/null | grep -q "community.general"; t
 fi
 
 # ── RESOLVE PLAYBOOK ──────────────────────────────────────────────────────────
+# Wipe any previously cached playbook so we always run the latest version.
+rm -rf "$(dirname "$PLAYBOOK_PATH")"
 mkdir -p "$(dirname "$PLAYBOOK_PATH")"
 
-# Always try GitHub first so a stale local copy never silently wins.
-# Fall back to a local main.yml only if the download fails.
 info "Downloading main.yml from GitHub..."
-if curl -fsSL "$PLAYBOOK_URL" -o "$PLAYBOOK_PATH" 2>/dev/null; then
-  ok "Playbook downloaded from GitHub."
-else
-  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-}")" 2>/dev/null && pwd || true)"
-  LOCAL_PLAYBOOK=""
-  for candidate in "${SCRIPT_DIR}/main.yml" "${PWD}/main.yml"; do
-    if [[ -f "$candidate" ]]; then
-      LOCAL_PLAYBOOK="$candidate"
-      break
-    fi
-  done
-
-  if [[ -n "$LOCAL_PLAYBOOK" ]]; then
-    info "GitHub unreachable — falling back to local file: ${LOCAL_PLAYBOOK}"
-    cp "$LOCAL_PLAYBOOK" "$PLAYBOOK_PATH"
-  else
-    die "Download failed and no local main.yml found. Verify:
+curl -fsSL "$PLAYBOOK_URL" -o "$PLAYBOOK_PATH" \
+  || die "Download failed. Verify main.yml exists at:
   https://github.com/${GITHUB_USER}/${REPO}/blob/${BRANCH}/main.yml"
-  fi
-fi
+ok "Playbook downloaded."
+
+info "Verifying playbook contains expected content..."
+grep -q "Ubuntu Desktop Bootstrap" "$PLAYBOOK_PATH" \
+  || die "Downloaded file looks wrong — check the GitHub repo."
 
 # ── RUN ANSIBLE ───────────────────────────────────────────────────────────────
 info "Running Ansible playbook..."
