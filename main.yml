@@ -165,32 +165,10 @@
         state: present
 
     # ── FASTFETCH ────────────────────────────────────────────────────────────
-    - name: Add fastfetch PPA
-      ansible.builtin.apt_repository:
-        repo: ppa:zhangsongcui3371/fastfetch
-        state: present
-        update_cache: true
-      register: _fastfetch_ppa
-      ignore_errors: true
-
-    - name: Install fastfetch via PPA
+    - name: Install fastfetch
       ansible.builtin.apt:
         name: fastfetch
         state: present
-      when: _fastfetch_ppa is succeeded
-
-    - name: Install fastfetch from GitHub releases (PPA fallback)
-      ansible.builtin.shell: |
-        LATEST=$(curl -fsSL https://api.github.com/repos/fastfetch-cli/fastfetch/releases/latest \
-          | grep '"tag_name"' | head -1 | cut -d '"' -f 4)
-        curl -fsSL \
-          "https://github.com/fastfetch-cli/fastfetch/releases/download/${LATEST}/fastfetch-linux-amd64.deb" \
-          -o /tmp/fastfetch.deb
-        dpkg -i /tmp/fastfetch.deb
-      args:
-        creates: /usr/bin/fastfetch
-      when: _fastfetch_ppa is failed
-      ignore_errors: true
 
     # ── NORDVPN ───────────────────────────────────────────────────────────────
     - name: Add NordVPN signing key
@@ -330,56 +308,6 @@
         done
       ignore_errors: true
 
-    # ── FASTFETCH CONFIG ──────────────────────────────────────────────────────
-    - name: Create fastfetch config directory
-      ansible.builtin.file:
-        path: "{{ target_home }}/.config/fastfetch"
-        state: directory
-        owner: "{{ target_user }}"
-        group: "{{ target_user }}"
-        mode: "0755"
-
-    - name: Write fastfetch config (Ubuntu theme)
-      ansible.builtin.copy:
-        dest: "{{ target_home }}/.config/fastfetch/config.jsonc"
-        owner: "{{ target_user }}"
-        group: "{{ target_user }}"
-        mode: "0644"
-        content: |
-          {
-            "$schema": "https://github.com/fastfetch-cli/fastfetch/raw/dev/doc/json_schema.json",
-            "logo": {
-              "type": "builtin",
-              "source": "Ubuntu",
-              "padding": { "top": 1, "left": 2 }
-            },
-            "display": {
-              "separator": "  →  ",
-              "color": { "keys": "yellow", "title": "red" }
-            },
-            "modules": [
-              "title",
-              "separator",
-              { "type": "os",       "key": "  OS" },
-              { "type": "host",     "key": "  Host" },
-              { "type": "kernel",   "key": "  Kernel" },
-              { "type": "uptime",   "key": "  Uptime" },
-              { "type": "packages", "key": "  Packages" },
-              { "type": "shell",    "key": "  Shell" },
-              { "type": "display",  "key": "  Resolution" },
-              { "type": "de",       "key": "  DE" },
-              { "type": "wm",       "key": "  WM" },
-              { "type": "terminal", "key": "  Terminal" },
-              { "type": "cpu",      "key": "  CPU" },
-              { "type": "gpu",      "key": "  GPU" },
-              { "type": "memory",   "key": "  Memory" },
-              { "type": "disk",     "key": "  Disk" },
-              { "type": "localip",  "key": "  IP" },
-              "separator",
-              "colors"
-            ]
-          }
-
     # ── .ZSHRC CONFIGURATION ─────────────────────────────────────────────────
     - name: Ensure .zshrc exists
       ansible.builtin.file:
@@ -396,7 +324,7 @@
         path: "{{ target_home }}/.zshrc"
         marker: "# {mark} ANSIBLE MANAGED: FASTFETCH"
         block: |
-          command -v fastfetch &>/dev/null && fastfetch
+          fastfetch --logo ubuntu
 
     - name: Add fzf key bindings to .zshrc
       ansible.builtin.blockinfile:
