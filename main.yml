@@ -272,10 +272,10 @@
       ansible.builtin.command: fc-cache -fv
       changed_when: false
 
-    # ── GNOME-TERMINAL FONT ───────────────────────────────────────────────────
-    # gsettings requires an active D-Bus user session. This task is best-effort:
-    # it is skipped gracefully if no session exists (e.g. headless first boot).
-    - name: Configure gnome-terminal font
+    # ── GNOME-TERMINAL: FONT + NORD PALETTE ──────────────────────────────────
+    # gsettings requires an active D-Bus user session — best-effort at provision
+    # time, takes full effect on next graphical login.
+    - name: Configure gnome-terminal (Nord palette + SFMono font)
       become: true
       become_user: "{{ target_user }}"
       ansible.builtin.shell: |
@@ -288,12 +288,22 @@
           gsettings set org.gnome.Terminal.ProfilesList list "['${PROFILE}']" 2>/dev/null || true
         fi
         BASE="org.gnome.Terminal.Legacy.Profile:/org/gnome/terminal/legacy/profiles:/:${PROFILE}/"
+        # Font
         gsettings set "${BASE}" font '{{ font_name }} {{ font_size }}' 2>/dev/null || true
         gsettings set "${BASE}" use-system-font false 2>/dev/null || true
+        # Nord colours
+        gsettings set "${BASE}" use-theme-colors false 2>/dev/null || true
+        gsettings set "${BASE}" background-color '#2E3440' 2>/dev/null || true
+        gsettings set "${BASE}" foreground-color '#D8DEE9' 2>/dev/null || true
+        gsettings set "${BASE}" bold-color '#D8DEE9' 2>/dev/null || true
+        gsettings set "${BASE}" bold-color-same-as-fg true 2>/dev/null || true
+        gsettings set "${BASE}" palette \
+          "['#3B4252','#BF616A','#A3BE8C','#EBCB8B','#81A1C1','#B48EAD','#88C0D0','#E5E9F0','#4C566A','#BF616A','#A3BE8C','#EBCB8B','#81A1C1','#B48EAD','#8FBCBB','#ECEFF4']" \
+          2>/dev/null || true
       ignore_errors: true
 
-    # ── PTYXIS FONT ───────────────────────────────────────────────────────────
-    - name: Configure ptyxis font
+    # ── PTYXIS: FONT + NORD PALETTE ───────────────────────────────────────────
+    - name: Configure ptyxis (Nord palette + SFMono font)
       become: true
       become_user: "{{ target_user }}"
       ansible.builtin.shell: |
@@ -303,8 +313,11 @@
         for profile in $PROFILES; do
           [ -z "$profile" ] && continue
           BASE="app.devsuite.Ptyxis.Profile:/app/devsuite/ptyxis/profiles/${profile}/"
+          # Font
           gsettings set "${BASE}" use-system-font false 2>/dev/null || true
           gsettings set "${BASE}" font-name '{{ font_name }} {{ font_size }}' 2>/dev/null || true
+          # Nord palette (Ptyxis supports named palettes)
+          gsettings set "${BASE}" palette 'Nord' 2>/dev/null || true
         done
       ignore_errors: true
 
