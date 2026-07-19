@@ -228,11 +228,9 @@
         shell: /bin/zsh
 
     # ── ZSH PLUGINS ──────────────────────────────────────────────────────────
-    - name: Install zsh-autosuggestions and zsh-syntax-highlighting via apt
+    - name: Install zsh-autosuggestions
       ansible.builtin.apt:
-        name:
-          - zsh-autosuggestions
-          - zsh-syntax-highlighting
+        name: zsh-autosuggestions
         state: present
 
     - name: Create system zsh plugins directory
@@ -349,58 +347,53 @@
         done
       ignore_errors: true
 
-    # ── .ZSHRC CONFIGURATION ─────────────────────────────────────────────────
-    - name: Ensure .zshrc exists
-      ansible.builtin.file:
-        path: "{{ target_home }}/.zshrc"
-        state: touch
+    # ── ZSH CONFIGURATION ────────────────────────────────────────────────────
+    # Ubuntu initializes completion globally unless this is set early in
+    # .zshenv. zsh-autocomplete will initialize and manage completion instead.
+    - name: Let zsh-autocomplete manage completion initialization
+      ansible.builtin.lineinfile:
+        path: "{{ target_home }}/.zshenv"
+        regexp: '^skip_global_compinit='
+        line: 'skip_global_compinit=1'
+        create: true
         owner: "{{ target_user }}"
         group: "{{ target_user }}"
         mode: "0644"
-        modification_time: preserve
-        access_time: preserve
 
-    - name: Add zsh plugins to .zshrc
-      ansible.builtin.blockinfile:
-        path: "{{ target_home }}/.zshrc"
-        marker: "# {mark} ANSIBLE MANAGED: ZSH PLUGINS"
-        block: |
-          # zsh-autocomplete (must load before compinit)
-          [ -f /usr/local/share/zsh/plugins/zsh-autocomplete/zsh-autocomplete.plugin.zsh ] && \
-            source /usr/local/share/zsh/plugins/zsh-autocomplete/zsh-autocomplete.plugin.zsh
-          # zsh-autosuggestions
-          [ -f /usr/share/zsh-autosuggestions/zsh-autosuggestions.zsh ] && \
-            source /usr/share/zsh-autosuggestions/zsh-autosuggestions.zsh
-          # zsh-fast-syntax-highlighting (replaces zsh-syntax-highlighting)
-          if [ -f /usr/local/share/zsh/plugins/fast-syntax-highlighting/fast-syntax-highlighting.plugin.zsh ]; then
-            source /usr/local/share/zsh/plugins/fast-syntax-highlighting/fast-syntax-highlighting.plugin.zsh
-          elif [ -f /usr/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh ]; then
-            source /usr/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh
-          fi
+    - name: Manage .zshrc
+      ansible.builtin.copy:
+        dest: "{{ target_home }}/.zshrc"
+        owner: "{{ target_user }}"
+        group: "{{ target_user }}"
+        mode: "0644"
+        backup: true
+        content: |
+          # Managed by Ansible. Local changes will be overwritten.
 
-    - name: Add fastfetch launcher to .zshrc
-      ansible.builtin.blockinfile:
-        path: "{{ target_home }}/.zshrc"
-        marker: "# {mark} ANSIBLE MANAGED: FASTFETCH"
-        block: |
-          fastfetch --logo ubuntu
+          # 1. Command History (Persistent Across Reboots)
+          HISTFILE="${ZDOTDIR:-$HOME}/.zsh_history"
+          HISTSIZE=50000
+          SAVEHIST=$HISTSIZE
+          setopt APPEND_HISTORY
+          setopt SHARE_HISTORY
+          setopt HIST_IGNORE_DUPS
 
-    - name: Add fzf key bindings to .zshrc
-      ansible.builtin.blockinfile:
-        path: "{{ target_home }}/.zshrc"
-        marker: "# {mark} ANSIBLE MANAGED: FZF"
-        block: |
-          [ -f /usr/share/doc/fzf/examples/key-bindings.zsh ] && \
-            source /usr/share/doc/fzf/examples/key-bindings.zsh
-          [ -f /usr/share/doc/fzf/examples/completion.zsh ] && \
-            source /usr/share/doc/fzf/examples/completion.zsh
+          # 2. Syntax Highlighting
+          # Load before Autocomplete to avoid unhandled ZLE widget warnings.
+          source /usr/local/share/zsh/plugins/fast-syntax-highlighting/fast-syntax-highlighting.plugin.zsh
 
-    - name: Add starship init to .zshrc
-      ansible.builtin.blockinfile:
-        path: "{{ target_home }}/.zshrc"
-        marker: "# {mark} ANSIBLE MANAGED: STARSHIP"
-        block: |
-          command -v starship &>/dev/null && eval "$(starship init zsh)"
+          # 3. Plugins and Completion
+          # Autocomplete must load before the other completion tools.
+          source /usr/local/share/zsh/plugins/zsh-autocomplete/zsh-autocomplete.plugin.zsh
+          source /usr/share/zsh-autosuggestions/zsh-autosuggestions.zsh
+          source /usr/share/doc/fzf/examples/key-bindings.zsh
+          source /usr/share/doc/fzf/examples/completion.zsh
+
+          # 4. Prompt
+          eval "$(starship init zsh)"
+
+          # 5. Eye Candy (Run on Demand)
+          alias ff='fastfetch --logo ubuntu'
 
     # ── GNOME REMOTE DESKTOP (built-in RDP, port 3389) ───────────────────────
     # Uses the native gnome-remote-desktop service — no xrdp needed.
